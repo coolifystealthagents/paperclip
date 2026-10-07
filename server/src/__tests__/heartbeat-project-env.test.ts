@@ -86,6 +86,128 @@ describe("resolveExecutionRunAdapterConfig", () => {
     });
     expect(result.resolvedConfig.env).toEqual({ AGENT_VALUE: "ok", ENVIRONMENT_VALUE: "ok", PROJECT_VALUE: "ok", ROUTINE_VALUE: "ok" });
   });
+  it("omits a company-tagged environment projection for a different active company", async () => {
+    const collectMissingRuntimeBindings = vi.fn().mockResolvedValue([]);
+    const resolveEnvBindings = vi.fn();
+    const result = await resolveExecutionRunAdapterConfig({
+      companyId: "company-2",
+      agentId: "agent-2",
+      environmentId: "environment-1",
+      environmentCompanyId: "company-1",
+      environmentEnv: {
+        STALE_SECRET: { type: "secret_ref", secretId: "company-1-secret", version: "latest" },
+      },
+      executionRunConfig: { env: { AGENT_ONLY: "agent-value" } },
+      projectEnv: null,
+      secretsSvc: {
+        collectMissingRuntimeBindings,
+        resolveAdapterConfigForRuntime: vi.fn().mockResolvedValue({
+          config: { env: { AGENT_ONLY: "agent-value" } },
+          secretKeys: new Set<string>(),
+          manifest: [],
+        }),
+        resolveEnvBindings,
+      } as any,
+    });
+
+    expect(result.resolvedConfig.env).toEqual({ AGENT_ONLY: "agent-value" });
+    expect(collectMissingRuntimeBindings).toHaveBeenCalledTimes(1);
+    expect(collectMissingRuntimeBindings.mock.calls[0]?.[2]).toMatchObject({
+      consumerType: "agent",
+      consumerId: "agent-2",
+    });
+    expect(resolveEnvBindings).not.toHaveBeenCalled();
+  });
+
+  it("preserves a company-tagged environment projection for the matching company", async () => {
+    const resolveEnvBindings = vi.fn().mockResolvedValue({
+      env: { ENV_ONLY: "environment-value" },
+      secretKeys: new Set<string>(),
+      manifest: [],
+    });
+    const result = await resolveExecutionRunAdapterConfig({
+      companyId: "company-1",
+      environmentId: "environment-1",
+      environmentCompanyId: "company-1",
+      environmentEnv: { ENV_ONLY: "environment-value" },
+      executionRunConfig: { env: { AGENT_ONLY: "agent-value" } },
+      projectEnv: null,
+      secretsSvc: {
+        resolveAdapterConfigForRuntime: vi.fn().mockResolvedValue({
+          config: { env: { AGENT_ONLY: "agent-value" } },
+          secretKeys: new Set<string>(),
+          manifest: [],
+        }),
+        resolveEnvBindings,
+      } as any,
+    });
+
+    expect(result.resolvedConfig.env).toEqual({
+      ENV_ONLY: "environment-value",
+      AGENT_ONLY: "agent-value",
+    });
+    expect(resolveEnvBindings).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves an untagged environment projection for backward compatibility", async () => {
+    const resolveEnvBindings = vi.fn().mockResolvedValue({
+      env: { ENV_ONLY: "environment-value" },
+      secretKeys: new Set<string>(),
+      manifest: [],
+    });
+    const result = await resolveExecutionRunAdapterConfig({
+      companyId: "company-2",
+      environmentId: "environment-1",
+      environmentCompanyId: null,
+      environmentEnv: { ENV_ONLY: "environment-value" },
+      executionRunConfig: { env: {} },
+      projectEnv: null,
+      secretsSvc: {
+        resolveAdapterConfigForRuntime: vi.fn().mockResolvedValue({
+          config: { env: {} },
+          secretKeys: new Set<string>(),
+          manifest: [],
+        }),
+        resolveEnvBindings,
+      } as any,
+    });
+
+    expect(result.resolvedConfig.env).toEqual({ ENV_ONLY: "environment-value" });
+    expect(resolveEnvBindings).toHaveBeenCalledTimes(1);
+  });
+
+  it("still fails closed for a genuinely missing effective agent binding when a foreign environment is omitted", async () => {
+    const missing = {
+      envKey: "COOLIFY_API_KEY",
+      bindingId: "missing-agent-binding",
+      consumerType: "agent",
+      consumerId: "agent-2",
+    };
+    await expect(resolveExecutionRunAdapterConfig({
+      companyId: "company-2",
+      agentId: "agent-2",
+      environmentId: "environment-1",
+      environmentCompanyId: "company-1",
+      environmentEnv: { COOLIFY_API_KEY: { type: "secret_ref", secretId: "company-1-secret", version: "latest" } },
+      executionRunConfig: { env: { COOLIFY_API_KEY: { type: "secret_ref", secretId: "missing-company-2-secret", version: "latest" } } },
+      projectEnv: null,
+      secretsSvc: {
+        collectMissingRuntimeBindings: vi.fn(async (_companyId, _env, context) =>
+          context.consumerType === "agent" ? [missing] : []),
+        resolveAdapterConfigForRuntime: vi.fn(),
+        resolveEnvBindings: vi.fn(),
+      } as any,
+    })).rejects.toMatchObject({
+      code: "configuration_incomplete",
+      resultJson: {
+        configurationIncomplete: {
+          reason: "secret_binding_missing",
+          missingBindings: [missing],
+        },
+      },
+    });
+  });
+
   it("overlays environment, project, and routine env on top of agent env and unions secret keys", async () => {
     const resolveAdapterConfigForRuntime = vi.fn().mockResolvedValue({
       config: {

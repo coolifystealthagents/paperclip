@@ -1576,6 +1576,7 @@ export async function resolveExecutionRunAdapterConfig(input: {
   heartbeatRunId?: string | null;
   responsibleUserId?: string | null;
   environmentId?: string | null;
+  environmentCompanyId?: string | null;
   environmentEnv?: unknown;
   environmentDriver?: string | null;
   projectId?: string | null;
@@ -1601,10 +1602,16 @@ export async function resolveExecutionRunAdapterConfig(input: {
     input.executionRunConfig,
     input.managedGitHubCredentials,
   );
-  const environmentEnv = stripForbiddenEnvBindings(
-    input.environmentEnv,
-    input.managedGitHubCredentials,
-  );
+  const foreignCompanyEnvironment =
+    typeof input.environmentCompanyId === "string" &&
+    input.environmentCompanyId.trim().length > 0 &&
+    input.environmentCompanyId !== input.companyId;
+  const environmentEnv = foreignCompanyEnvironment
+    ? null
+    : stripForbiddenEnvBindings(
+        input.environmentEnv,
+        input.managedGitHubCredentials,
+      );
   const projectEnv = stripForbiddenEnvBindings(
     input.projectEnv,
     input.managedGitHubCredentials,
@@ -21811,6 +21818,9 @@ export function heartbeatService(
           issueId,
           heartbeatRunId: run.id,
           environmentId: selectedEnvironmentForConfig?.id ?? null,
+          environmentCompanyId: readNonEmptyString(
+            parseObject(selectedEnvironmentForConfig?.metadata).activeCompanyId,
+          ),
           environmentEnv: aiBinding ? stripAiAuthBindings(selectedEnvironmentForConfig?.envVars) : selectedEnvironmentForConfig?.envVars ?? null,
           environmentDriver: selectedEnvironmentForConfig?.driver ?? null,
           projectId: projectContext?.id ?? null,
