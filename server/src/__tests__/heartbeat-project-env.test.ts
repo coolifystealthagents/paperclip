@@ -210,6 +210,110 @@ describe("resolveExecutionRunAdapterConfig", () => {
     });
   });
 
+  describe("environment active-company scope", () => {
+    const resolved = (config: Record<string, unknown>) => ({
+      config,
+      secretKeys: new Set<string>(),
+      manifest: [],
+    });
+
+    it("omits a mismatched-company environment while preserving agent bindings", async () => {
+      const collectMissingRuntimeBindings = vi.fn().mockResolvedValue([]);
+      const resolveEnvBindings = vi.fn();
+      const result = await resolveExecutionRunAdapterConfig({
+        companyId: "company-2",
+        agentId: "agent-2",
+        environmentId: "shared-local",
+        environmentActiveCompanyId: "company-1",
+        environmentEnv: { STALE_ENV_SECRET: { type: "secret_ref", secretId: "company-1-secret" } },
+        executionRunConfig: { env: { COMPANY_BINDING: "agent-value" } },
+        projectEnv: null,
+        secretsSvc: {
+          collectMissingRuntimeBindings,
+          resolveAdapterConfigForRuntime: vi.fn(async (_companyId, config) => resolved(config)),
+          resolveEnvBindings,
+        } as any,
+      });
+
+      expect(result.resolvedConfig.env).toEqual({ COMPANY_BINDING: "agent-value" });
+      expect(collectMissingRuntimeBindings).toHaveBeenCalledTimes(1);
+      expect(collectMissingRuntimeBindings.mock.calls[0]?.[2]).toMatchObject({ consumerType: "agent", consumerId: "agent-2" });
+      expect(resolveEnvBindings).not.toHaveBeenCalled();
+    });
+
+    it("preserves matching-company environment behavior", async () => {
+      const collectMissingRuntimeBindings = vi.fn().mockResolvedValue([]);
+      const resolveEnvBindings = vi.fn().mockResolvedValue({ env: { ENV_VALUE: "matching" }, secretKeys: new Set<string>(), manifest: [] });
+      const result = await resolveExecutionRunAdapterConfig({
+        companyId: "company-1",
+        agentId: "agent-1",
+        environmentId: "shared-local",
+        environmentActiveCompanyId: "company-1",
+        environmentEnv: { ENV_VALUE: "matching" },
+        executionRunConfig: { env: { AGENT_VALUE: "agent" } },
+        projectEnv: null,
+        secretsSvc: {
+          collectMissingRuntimeBindings,
+          resolveAdapterConfigForRuntime: vi.fn(async (_companyId, config) => resolved(config)),
+          resolveEnvBindings,
+        } as any,
+      });
+
+      expect(result.resolvedConfig.env).toEqual({ ENV_VALUE: "matching", AGENT_VALUE: "agent" });
+      expect(collectMissingRuntimeBindings.mock.calls[0]?.[2]).toMatchObject({ consumerType: "environment", consumerId: "shared-local" });
+      expect(resolveEnvBindings).toHaveBeenCalledOnce();
+    });
+
+    it("preserves untagged environment compatibility", async () => {
+      const resolveEnvBindings = vi.fn().mockResolvedValue({ env: { LEGACY_ENV_VALUE: "legacy" }, secretKeys: new Set<string>(), manifest: [] });
+      const result = await resolveExecutionRunAdapterConfig({
+        companyId: "company-2",
+        environmentId: "shared-local",
+        environmentActiveCompanyId: null,
+        environmentEnv: { LEGACY_ENV_VALUE: "legacy" },
+        executionRunConfig: { env: {} },
+        projectEnv: null,
+        secretsSvc: {
+          collectMissingRuntimeBindings: vi.fn().mockResolvedValue([]),
+          resolveAdapterConfigForRuntime: vi.fn(async (_companyId, config) => resolved(config)),
+          resolveEnvBindings,
+        } as any,
+      });
+
+      expect(result.resolvedConfig.env).toEqual({ LEGACY_ENV_VALUE: "legacy" });
+      expect(resolveEnvBindings).toHaveBeenCalledOnce();
+    });
+
+    it("still fails closed for a genuinely missing effective agent binding", async () => {
+      const missing = {
+        bindingType: "secret_ref",
+        envKey: "REQUIRED_AGENT_SECRET",
+        configPath: "env.REQUIRED_AGENT_SECRET",
+        consumerType: "agent",
+        consumerId: "agent-2",
+        secretId: "missing-agent-secret",
+        secretName: "REQUIRED_AGENT_SECRET",
+      };
+      await expect(resolveExecutionRunAdapterConfig({
+        companyId: "company-2",
+        agentId: "agent-2",
+        environmentId: "shared-local",
+        environmentActiveCompanyId: "company-1",
+        environmentEnv: { STALE_ENV_VALUE: "ignored" },
+        executionRunConfig: { env: { REQUIRED_AGENT_SECRET: { type: "secret_ref", secretId: "missing-agent-secret" } } },
+        projectEnv: null,
+        secretsSvc: {
+          collectMissingRuntimeBindings: vi.fn(async (_companyId, _env, context) => context.consumerType === "agent" ? [missing] : []),
+          resolveAdapterConfigForRuntime: vi.fn(),
+          resolveEnvBindings: vi.fn(),
+        } as any,
+      })).rejects.toMatchObject({
+        code: "configuration_incomplete",
+        resultJson: { configurationIncomplete: { reason: "secret_binding_missing", missingBindings: [missing] } },
+      });
+    });
+  });
+
   it("drops PAPERCLIP_API_KEY bindings but forwards other PAPERCLIP_-named env to resolution", async () => {
     const resolveAdapterConfigForRuntime = vi.fn(async (_companyId, config: Record<string, unknown>) => ({
       config: {

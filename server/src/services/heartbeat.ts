@@ -1577,6 +1577,7 @@ export async function resolveExecutionRunAdapterConfig(input: {
   responsibleUserId?: string | null;
   environmentId?: string | null;
   environmentEnv?: unknown;
+  environmentActiveCompanyId?: string | null;
   environmentDriver?: string | null;
   projectId?: string | null;
   routineId?: string | null;
@@ -1601,10 +1602,16 @@ export async function resolveExecutionRunAdapterConfig(input: {
     input.executionRunConfig,
     input.managedGitHubCredentials,
   );
-  const environmentEnv = stripForbiddenEnvBindings(
-    input.environmentEnv,
-    input.managedGitHubCredentials,
-  );
+  const environmentBelongsToDifferentCompany =
+    typeof input.environmentActiveCompanyId === "string" &&
+    input.environmentActiveCompanyId.trim().length > 0 &&
+    input.environmentActiveCompanyId !== input.companyId;
+  const environmentEnv = environmentBelongsToDifferentCompany
+    ? null
+    : stripForbiddenEnvBindings(
+        input.environmentEnv,
+        input.managedGitHubCredentials,
+      );
   const projectEnv = stripForbiddenEnvBindings(
     input.projectEnv,
     input.managedGitHubCredentials,
@@ -21812,6 +21819,12 @@ export function heartbeatService(
           heartbeatRunId: run.id,
           environmentId: selectedEnvironmentForConfig?.id ?? null,
           environmentEnv: aiBinding ? stripAiAuthBindings(selectedEnvironmentForConfig?.envVars) : selectedEnvironmentForConfig?.envVars ?? null,
+          environmentActiveCompanyId: (() => {
+            const activeCompanyId = parseObject(
+              selectedEnvironmentForConfig?.metadata,
+            ).activeCompanyId;
+            return typeof activeCompanyId === "string" ? activeCompanyId : null;
+          })(),
           environmentDriver: selectedEnvironmentForConfig?.driver ?? null,
           projectId: projectContext?.id ?? null,
           routineId: routineEnvContext.routineId,
