@@ -143,6 +143,18 @@ describe("docker-entrypoint.sh", () => {
     expect(calls).toContain("gosu node echo ENTRYPOINT-CMD-RAN");
   });
 
+  it("starts the app when a deep ownership scan times out", async () => {
+    installStubs({ uid: 0, gid: 0, homeMismatch: false });
+    writeStub("timeout", "exit 124");
+
+    const { stdout, stderr, calls } = await runEntrypoint({ PAPERCLIP_HOME: stubDir });
+
+    expect(stdout).toContain("ENTRYPOINT-CMD-RAN");
+    expect(stderr).toContain("deep ownership probe timed out or failed");
+    expect(calls).not.toContain("chown");
+    expect(calls).toContain("gosu node echo ENTRYPOINT-CMD-RAN");
+  });
+
   it("honours PAPERCLIP_HOME for the ownership probe", async () => {
     installStubs({ uid: 0, gid: 0, homeMismatch: true });
 
