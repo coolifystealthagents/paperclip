@@ -38,11 +38,23 @@ fi
 # server crashed on its first mkdir. The probe is a first-mismatch find
 # over the WHOLE tree (uid and gid): a root-owned mount or descendant
 # (init containers, backup restores, files written before a remap) is
-# found immediately and repaired recursively, a GID-only remap is caught,
-# and a fully-correct tree costs one metadata-only walk with no chown.
+# found immediately and repaired recursively, a GID-only remap is caught.
+# Large persisted homes can take longer than the reverse proxy timeout to
+# scan. Check the top levels first, then bound the deep scan so app startup
+# still proceeds when the deep metadata walk stalls. A later write to an
+# inaccessible descendant will report its own permission error.
 home_dir="${PAPERCLIP_HOME:-/paperclip}"
-if [ -d "$home_dir" ] && [ -n "$(find "$home_dir" \( ! -user node -o ! -group node \) -print -quit 2>/dev/null)" ]; then
-    chown -R node:node "$home_dir"
+if [ -d "$home_dir" ]; then
+    mismatch="$(find "$home_dir" -maxdepth 3 \( ! -user node -o ! -group node \) -print -quit 2>/dev/null)"
+    if [ -z "$mismatch" ]; then
+        if ! mismatch="$(timeout -k 5s 20s find "$home_dir" \( ! -user node -o ! -group node \) -print -quit 2>/dev/null)"; then
+            echo "docker-entrypoint.sh: deep ownership probe timed out or failed; starting app without recursive repair" >&2
+            mismatch=""
+        fi
+    fi
+    if [ -n "$mismatch" ]; then
+        chown -R node:node "$home_dir"
+    fi
 fi
 
 exec gosu node "$@"
